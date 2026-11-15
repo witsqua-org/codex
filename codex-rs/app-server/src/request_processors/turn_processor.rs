@@ -1007,10 +1007,12 @@ impl TurnRequestProcessor {
         request_id: &ConnectionRequestId,
         params: ThreadSettingsUpdateParams,
     ) -> Result<ThreadSettingsUpdateResponse, JSONRPCErrorError> {
-        let (_, thread) = self.load_thread(&params.thread_id).await?;
+        let (thread_id, thread) = self.load_thread(&params.thread_id).await?;
         self.ensure_direct_input_allowed(request_id, thread.as_ref())
             .await?;
         let cwd = resolve_request_cwd(params.cwd)?;
+        // LegalAI: kept to record a moved chat's new folder in the thread list once the update succeeds.
+        let moved_cwd = cwd.clone();
         let environments =
             resolve_turn_environment_requests(self.thread_manager.as_ref(), params.environments)?;
         let environment_override = self
@@ -1061,6 +1063,17 @@ impl TurnRequestProcessor {
                     CodexErrorDetails::InvalidRequest(message) => invalid_request(message.clone()),
                     _ => internal_error(format!("failed to update thread settings: {err}")),
                 })?;
+        }
+
+        // LegalAI: the thread list (SQLite) otherwise keeps the old folder until the chat is re-indexed, and
+        // unarchiving restores that row, so a chat moved to another project would list under the old one.
+        if let Some(cwd) = moved_cwd.as_ref()
+            && let Some(state_db) = thread.state_db()
+        {
+            let normalized = codex_rollout::state_db::normalize_cwd_for_state_db(cwd.as_path());
+            if let Err(err) = state_db.update_thread_cwd(thread_id, &normalized).await {
+                tracing::warn!("failed to record the new folder of thread {thread_id}: {err}");
+            }
         }
 
         Ok(ThreadSettingsUpdateResponse {})

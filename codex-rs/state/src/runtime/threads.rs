@@ -788,6 +788,21 @@ ON CONFLICT(id) DO NOTHING
         Ok(result.rows_affected() > 0)
     }
 
+    /// LegalAI: the folder a chat works in, after `thread/settings/update` moved it (a chat moved to another
+    /// project). The list reads this column, and unarchiving keeps it, so it must follow the move at once.
+    pub async fn update_thread_cwd(
+        &self,
+        thread_id: ThreadId,
+        cwd: &std::path::Path,
+    ) -> anyhow::Result<bool> {
+        let result = sqlx::query("UPDATE threads SET cwd = ? WHERE id = ?")
+            .bind(cwd.display().to_string())
+            .bind(thread_id.to_string())
+            .execute_with_busy_retry(self.pool.as_ref())
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn update_thread_name(
         &self,
         thread_id: ThreadId,
