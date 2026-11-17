@@ -1011,7 +1011,7 @@ impl TurnRequestProcessor {
         self.ensure_direct_input_allowed(request_id, thread.as_ref())
             .await?;
         let cwd = resolve_request_cwd(params.cwd)?;
-        // LegalAI: kept to record a moved chat's new folder in the thread list once the update succeeds.
+        // WitLex: kept to record a moved chat's new folder in the thread list once the update succeeds.
         let moved_cwd = cwd.clone();
         let environments =
             resolve_turn_environment_requests(self.thread_manager.as_ref(), params.environments)?;
@@ -1065,7 +1065,7 @@ impl TurnRequestProcessor {
                 })?;
         }
 
-        // LegalAI: the thread list (SQLite) otherwise keeps the old folder until the chat is re-indexed, and
+        // WitLex: the thread list (SQLite) otherwise keeps the old folder until the chat is re-indexed, and
         // unarchiving restores that row, so a chat moved to another project would list under the old one.
         if let Some(cwd) = moved_cwd.as_ref()
             && let Some(state_db) = thread.state_db()

@@ -788,7 +788,7 @@ ON CONFLICT(id) DO NOTHING
         Ok(result.rows_affected() > 0)
     }
 
-    /// LegalAI: the folder a chat works in, after `thread/settings/update` moved it (a chat moved to another
+    /// WitLex: the folder a chat works in, after `thread/settings/update` moved it (a chat moved to another
     /// project). The list reads this column, and unarchiving keeps it, so it must follow the move at once.
     pub async fn update_thread_cwd(
         &self,
