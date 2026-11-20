@@ -1389,7 +1389,8 @@ pub(crate) fn mcp_initialize_request_params(
     }
     InitializeRequestParams::new(
         capabilities,
-        Implementation::new("codex-mcp-client", env!("CARGO_PKG_VERSION")).with_title("Codex"),
+        // WitLex: the title an MCP server sees for this client (the name stays, servers key on it).
+        Implementation::new("codex-mcp-client", env!("CARGO_PKG_VERSION")).with_title("WitLex"),
     )
     .with_protocol_version(ProtocolVersion::V_2025_06_18)
 }

@@ -111,7 +111,9 @@ pub(crate) async fn start_authorization(
     auth_manager.set_metadata(metadata);
     let mut request = AuthorizationRequest::new(redirect_uri.clone())
         .with_scopes(scopes.iter().copied())
-        .with_client_name("Codex");
+        // WitLex: the name a server's consent page shows for a dynamically registered client.
+        // (WitLex always asks for DCR: the CIMD document below is Codex's own, at chatgpt.com.)
+        .with_client_name("WitLex");
     if offer_cimd {
         // CIMD is an active IETF Internet-Draft: this HTTPS client identifier resolves
         // to its self-referential JSON metadata document.
