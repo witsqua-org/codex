@@ -1471,6 +1471,13 @@ impl ThreadManager {
                 "a captured internal parent requires a new or forked internal session".to_owned(),
             ));
         }
+        // WitLex: a persisted internal session (the approval reviewer) is recorded as a child of
+        // the chat it works for, so that deleting or archiving the chat takes it too. The edge is
+        // closed from the start: nothing may resume it as one of the chat's agents.
+        let internal_child_of = parent
+            .as_ref()
+            .filter(|_| !options.config.ephemeral)
+            .map(|parent| parent.thread_id);
         let mut request = if let Some(parent) = parent {
             let mut request =
                 ThreadSpawnRequest::new(options, parent.auth_manager, parent.agent_control);
@@ -1490,7 +1497,23 @@ impl ThreadManager {
             request
         };
         request.startup = startup;
-        Box::pin(self.state.spawn_thread(request)).await
+        let new_thread = Box::pin(self.state.spawn_thread(request)).await?;
+        if let Some(parent_thread_id) = internal_child_of
+            && let Some(agent_graph_store) = self.state.agent_graph_store()
+            && let Err(err) = agent_graph_store
+                .upsert_thread_spawn_edge(
+                    parent_thread_id,
+                    new_thread.thread_id,
+                    codex_agent_graph_store::ThreadSpawnEdgeStatus::Closed,
+                )
+                .await
+        {
+            warn!(
+                "failed to record internal session {} as a child of {parent_thread_id}: {err}",
+                new_thread.thread_id
+            );
+        }
+        Ok(new_thread)
     }
 
     // TODO(jif) merge with fork_agent
