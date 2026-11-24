@@ -858,6 +858,14 @@ fn witlex_document_guard_leaves_a_git_work_tree_its_shell() {
     std::fs::create_dir_all(repo.join("fixtures")).expect("fixtures");
     let case = dir.path().join("case");
     std::fs::create_dir_all(&case).expect("case");
+    for file in [
+        "fixtures/rows.csv",
+        "fixtures/test.db",
+        "fixtures/sample.pdf",
+    ] {
+        std::fs::write(repo.join(file), "x").expect("repository file");
+    }
+    std::fs::write(case.join("流水.csv"), "a,b\n").expect("statement");
     let uri = |path: &std::path::Path| PathUri::from_host_native_path(path).expect("cwd uri");
     let read = exec_command::witlex_document_read;
 
@@ -870,6 +878,11 @@ fn witlex_document_guard_leaves_a_git_work_tree_its_shell() {
         assert_eq!(read(script, &uri(&repo)).map(|r| r.path), None, "{script}");
     }
     assert!(read("pdftotext fixtures/sample.pdf -", &uri(&repo)).is_some());
+    // A table the chat makes in a case folder is not a read.
+    assert_eq!(
+        read("sqlite3 totals.db 'CREATE TABLE t (a)'", &uri(&case)).map(|r| r.path),
+        None
+    );
     let declined = read("head -5 流水.csv", &uri(&case)).expect("declined in a case folder");
     assert!(
         declined

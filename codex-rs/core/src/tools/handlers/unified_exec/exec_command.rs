@@ -286,7 +286,8 @@ impl ExecCommandHandler {
 }
 
 /// WitLex (D205): a document, or a table or database outside a git work tree, that the script
-/// reads itself. A repository at the home folder or the root does not count as a work tree.
+/// reads itself; a file that does not exist yet is made, not read. A repository at the home
+/// folder or the root does not count as a work tree.
 pub(super) fn witlex_document_read(
     script: &str,
     cwd: &PathUri,
@@ -296,11 +297,15 @@ pub(super) fn witlex_document_read(
         codex_git_utils::get_git_repo_root(path)
             .is_some_and(|root| root.parent().is_some() && home.as_deref() != Some(root.as_path()))
     };
+    let exists = |path: &std::path::Path| path.exists();
     codex_shell_command::document_guard::document_read_in_script(
         script,
         &cwd.to_path_buf(),
         home.as_deref(),
-        &in_git_tree,
+        &codex_shell_command::document_guard::Probe {
+            exists: &exists,
+            in_git_tree: &in_git_tree,
+        },
     )
 }
 

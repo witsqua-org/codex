@@ -9,8 +9,18 @@ fn never_git(_: &Path) -> bool {
     false
 }
 
+fn always(_: &Path) -> bool {
+    true
+}
+
+/// Every named file exists; nothing is in a git work tree.
+const CASE: Probe<'static> = Probe {
+    exists: &always,
+    in_git_tree: &never_git,
+};
+
 fn check(script: &str) -> Option<DocumentRead> {
-    document_read_in_script(script, Path::new(CWD), Some(Path::new(HOME)), &never_git)
+    document_read_in_script(script, Path::new(CWD), Some(Path::new(HOME)), &CASE)
 }
 
 fn blocked(script: &str) -> String {
@@ -177,7 +187,7 @@ fn shell_wrappers_and_cd_are_followed() {
         .map(ToString::to_string)
         .collect();
     assert_eq!(
-        document_read_in_command(&argv, Path::new("/tmp/case"), None, &never_git).map(|r| r.path),
+        document_read_in_command(&argv, Path::new("/tmp/case"), None, &CASE).map(|r| r.path),
         Some(PathBuf::from("/tmp/case/流水.csv"))
     );
 }
@@ -206,6 +216,61 @@ fn export_copies_are_for_the_shell() {
     allowed("awk -F, 'NR>1 {s+=$5} END {print s}' 对公流水.export.csv");
     allowed("python3 -c \"import csv; print(sum(1 for _ in open('/tmp/x/起诉书.export.jsonl')))\"");
     allowed("sort -t, -k2 /tmp/x/流水.export.csv | head");
+}
+
+#[test]
+fn a_file_only_written_by_code_is_not_a_read() {
+    allowed(
+        "python3 - <<'EOF'\nimport pandas as pd\ndf = pd.DataFrame({'a': [1]})\ndf.to_csv('totals.csv', index=False)\nEOF",
+    );
+    allowed("python3 -c \"import openpyxl; wb = openpyxl.Workbook(); wb.save('报告.xlsx')\"");
+    allowed(
+        "python3 -c \"from docx import Document; d = Document(); d.save( '/tmp/x/意见书.docx' )\"",
+    );
+    allowed("python3 -c \"df.to_excel(\\\"汇总 表.xlsx\\\")\"");
+    allowed("python3 -c \"import csv; w = csv.writer(open('out.csv', 'w', newline=''))\"");
+    allowed("python3 -c \"open('log.csv', mode='a').write('x')\"");
+    allowed("node -e \"require('fs').writeFileSync('/tmp/x/汇总.csv', rows.join('\\n'))\"");
+    allowed("python3 -c \"import xlsxwriter; xlsxwriter.Workbook('out.xlsx')\"");
+    // Reading an export copy and writing a table of totals is what D203 asks for.
+    allowed(
+        "python3 - <<'EOF'\nimport csv\nrows = list(csv.reader(open('流水.export.csv')))\nwith open('totals.csv', 'w') as f:\n    f.write('x')\nEOF",
+    );
+    allowed("awk -F, 'NR>1 {s+=$5} END {print s}' 'cases.export 2.csv'");
+    // A read beside a write is still a read; `open(…)` without a write mode reads.
+    assert_eq!(
+        blocked("python3 -c \"import pandas as pd; pd.read_csv('流水.csv').to_csv('totals.csv')\""),
+        format!("{CWD}/流水.csv")
+    );
+    assert_eq!(
+        blocked("python3 -c \"open('流水.csv', 'r').read(); open('b.csv', encoding='gbk')\""),
+        format!("{CWD}/流水.csv")
+    );
+    assert_eq!(
+        blocked("python3 -c \"open('/tmp/x/b.csv', encoding='gbk').read()\""),
+        "/tmp/x/b.csv"
+    );
+}
+
+#[test]
+fn a_file_that_does_not_exist_yet_is_made_not_read() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("流水.csv"), "a,b\n").expect("statement");
+    let exists = |path: &Path| path.exists();
+    let probe = Probe {
+        exists: &exists,
+        in_git_tree: &never_git,
+    };
+    let run = |script: &str| document_read_in_script(script, dir.path(), None, &probe);
+    assert_eq!(run("sqlite3 out.db 'CREATE TABLE t (a)'"), None);
+    assert_eq!(
+        run("python3 make.py --out 报告.xlsx && cat > 汇总.csv <<'EOF'\na\nEOF"),
+        None
+    );
+    assert_eq!(
+        run("head -3 流水.csv").map(|r| r.path),
+        Some(dir.path().join("流水.csv"))
+    );
 }
 
 #[test]
@@ -246,7 +311,11 @@ fn tables_and_databases_in_a_git_work_tree_stay_readable() {
         }
         false
     };
-    let run = |script: &str, cwd: &Path| document_read_in_script(script, cwd, None, &in_git);
+    let probe = Probe {
+        exists: &always,
+        in_git_tree: &in_git,
+    };
+    let run = |script: &str, cwd: &Path| document_read_in_script(script, cwd, None, &probe);
     assert_eq!(
         run(
             "head -5 fixtures/rows.csv && sqlite3 fixtures/test.db .tables",

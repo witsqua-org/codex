@@ -12,7 +12,10 @@
 //! - documents always; tables and databases only outside a git work tree (a developer's
 //!   repository keeps its normal shell);
 //! - WitLex's export copies (`name.export.csv`) are always allowed: they exist for the shell;
-//! - a file named only as an output (`> out.csv`) is not a read.
+//! - a file named only as an output (`> out.csv`) is not a read, nor is a path that does not
+//!   exist yet, nor a quoted path given only to an obvious write in code (`df.to_csv('x.csv')`,
+//!   `wb.save('报告.xlsx')`, `open('x.csv', 'w')`, `writeFileSync('x.csv', …)`): making files is
+//!   what the model should do.
 //!
 //! `parse_command` is not used for this: it collapses any pipeline with a program it does not
 //! know (`iconv … | grep …`) into `Unknown`, which are exactly the commands to find.
@@ -160,6 +163,22 @@ static BARE_PATH: Lazy<Option<Regex>> = Lazy::new(|| {
     ))
     .ok()
 });
+
+/// Calls in code whose first argument is a file written, not read.
+const WRITE_CALLS: &[&str] = &[
+    "to_csv(",
+    "to_excel(",
+    "to_parquet(",
+    ".save(",
+    "writeFileSync(",
+    "writeFile(",
+    "createWriteStream(",
+    "ExcelWriter(",
+    "Workbook(",
+];
+/// What follows a path given to `open(` in write or append mode: `, 'w'`, `, mode="a"`, `, 'wb'`.
+static OPEN_FOR_WRITING: Lazy<Option<Regex>> =
+    Lazy::new(|| Regex::new(r#"^\s*,\s*(?:mode\s*=\s*)?['"][rbt+]*[wax]"#).ok());
 
 #[derive(Debug, Default)]
 struct Segment {
@@ -463,15 +482,35 @@ fn mentions(words: &[String], heredocs: &[String]) -> Vec<String> {
     found
 }
 
-/// Paths of guarded kinds inside code: quoted literals, then bare words.
+/// Whether the quoted literal at `start..end` of `text` is only the file a call writes.
+fn written(text: &str, start: usize, end: usize) -> bool {
+    let before = text[..start].trim_end();
+    if WRITE_CALLS.iter().any(|call| before.ends_with(call)) {
+        return true;
+    }
+    before.ends_with("open(")
+        && OPEN_FOR_WRITING
+            .as_ref()
+            .is_some_and(|re| re.is_match(&text[end..]))
+}
+
+/// Paths of guarded kinds inside code: quoted literals (not those only written), then bare words
+/// outside them.
 fn scan(text: &str, found: &mut Vec<String>) {
+    let mut rest = text.to_string();
     if let Some(re) = QUOTED_PATH.as_ref() {
         for caps in re.captures_iter(text) {
-            if let Some(m) = caps.get(1).or_else(|| caps.get(2)) {
+            let (Some(whole), Some(m)) = (caps.get(0), caps.get(1).or_else(|| caps.get(2))) else {
+                continue;
+            };
+            if !written(text, whole.start(), whole.end()) {
                 found.push(m.as_str().to_string());
             }
+            // The bare-word pass must not find the same literal again (or a piece of it).
+            rest.replace_range(whole.range(), &" ".repeat(whole.len()));
         }
     }
+    let text = rest.as_str();
     if let Some(re) = BARE_PATH.as_ref() {
         for caps in re.captures_iter(text) {
             if let Some(m) = caps.get(1) {
@@ -483,22 +522,29 @@ fn scan(text: &str, found: &mut Vec<String>) {
 
 /// The first read of a guarded file in a shell script, or `None`.
 ///
-/// `in_git_tree` tells whether a path lies in a git work tree (tables and databases there are a
-/// developer's own and stay readable).
+/// `exists` tells whether a path exists (one that does not is made, not read); `in_git_tree`
+/// whether it lies in a git work tree (tables and databases there are a developer's own and stay
+/// readable).
 pub fn document_read_in_script(
     script: &str,
     cwd: &Path,
     home: Option<&Path>,
-    in_git_tree: &dyn Fn(&Path) -> bool,
+    probe: &Probe<'_>,
 ) -> Option<DocumentRead> {
-    document_read_depth(script, cwd, home, in_git_tree, 0)
+    document_read_depth(script, cwd, home, probe, 0)
+}
+
+/// What the guard asks of the file system.
+pub struct Probe<'a> {
+    pub exists: &'a dyn Fn(&Path) -> bool,
+    pub in_git_tree: &'a dyn Fn(&Path) -> bool,
 }
 
 fn document_read_depth(
     script: &str,
     cwd: &Path,
     home: Option<&Path>,
-    in_git_tree: &dyn Fn(&Path) -> bool,
+    probe: &Probe<'_>,
     depth: usize,
 ) -> Option<DocumentRead> {
     if depth > 4 {
@@ -522,7 +568,7 @@ fn document_read_depth(
         if SHELLS.contains(&program) {
             // `bash <<EOF`: the heredoc is the script.
             for body in &segment.heredocs {
-                if let Some(found) = document_read_depth(body, &cwd, home, in_git_tree, depth + 1) {
+                if let Some(found) = document_read_depth(body, &cwd, home, probe, depth + 1) {
                     return Some(found);
                 }
             }
@@ -531,7 +577,7 @@ fn document_read_depth(
                 .iter()
                 .position(|w| w.starts_with('-') && !w.starts_with("--") && w.contains('c'))
                 && let Some(inner) = words.get(flag + 1)
-                && let Some(found) = document_read_depth(inner, &cwd, home, in_git_tree, depth + 1)
+                && let Some(found) = document_read_depth(inner, &cwd, home, probe, depth + 1)
             {
                 return Some(found);
             }
@@ -548,7 +594,8 @@ fn document_read_depth(
         };
         for named in mentions(&words[1..], code) {
             let base = named.rsplit('/').next().unwrap_or(&named);
-            if base.contains(".export.") {
+            // An export copy, also as WitLex renames one beside an older copy (`a.export 2.csv`).
+            if base.contains(".export.") || base.contains(".export ") {
                 continue;
             }
             let Some((_, ext)) = base.rsplit_once('.') else {
@@ -558,7 +605,9 @@ fn document_read_depth(
                 continue;
             };
             let path = resolve(&named, &cwd, home);
-            if kind != DocumentKind::Document && in_git_tree(&path) {
+            if !(probe.exists)(&path)
+                || (kind != DocumentKind::Document && (probe.in_git_tree)(&path))
+            {
                 continue;
             }
             return Some(DocumentRead {
@@ -578,13 +627,13 @@ pub fn document_read_in_command(
     command: &[String],
     cwd: &Path,
     home: Option<&Path>,
-    in_git_tree: &dyn Fn(&Path) -> bool,
+    probe: &Probe<'_>,
 ) -> Option<DocumentRead> {
     if let Some((_, script)) = crate::bash::extract_bash_command(command) {
-        return document_read_in_script(script, cwd, home, in_git_tree);
+        return document_read_in_script(script, cwd, home, probe);
     }
     let joined = crate::parse_command::shlex_join(command);
-    document_read_in_script(&joined, cwd, home, in_git_tree)
+    document_read_in_script(&joined, cwd, home, probe)
 }
 
 #[cfg(test)]
