@@ -573,6 +573,9 @@ pub enum Feature {
     ResponsesWebsockets,
     /// Legacy rollout flag for Responses API WebSocket transport v2 experiments.
     ResponsesWebsocketsV2,
+    /// WitLex (D205): exec_command declines a shell read of a document, or of a table or
+    /// database outside a git work tree, and names WitLex's reader for it instead.
+    WitlexDocumentGuard,
 }
 
 impl Feature {
@@ -2445,6 +2448,13 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "workspace_dependencies",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    // WitLex (D205): off unless WitLex's config turns it on.
+    FeatureSpec {
+        id: Feature::WitlexDocumentGuard,
+        key: "witlex_document_guard",
+        stage: Stage::Stable,
+        default_enabled: false,
     },
 ];
 

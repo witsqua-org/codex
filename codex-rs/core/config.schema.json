@@ -1478,6 +1478,9 @@
             "windows_sandbox_service": {
               "type": "boolean"
             },
+            "witlex_document_guard": {
+              "type": "boolean"
+            },
             "workspace_dependencies": {
               "type": "boolean"
             },
@@ -8566,6 +8569,9 @@
           "type": "boolean"
         },
         "windows_sandbox_service": {
+          "type": "boolean"
+        },
+        "witlex_document_guard": {
           "type": "boolean"
         },
         "workspace_dependencies": {

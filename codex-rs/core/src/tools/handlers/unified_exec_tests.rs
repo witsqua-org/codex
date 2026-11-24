@@ -846,3 +846,34 @@ async fn exec_command_telemetry_records_configured_snapshot_mode(
         vec![("shell_snapshot_mode", expected_mode.to_string())],
     );
 }
+
+/// WitLex (D205): a developer chat over a repository keeps its shell on the repository's tables and
+/// databases; a document, or the same table in a case folder, is declined before anything runs.
+#[test]
+fn witlex_document_guard_leaves_a_git_work_tree_its_shell() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(repo.join(".git")).expect("git dir");
+    std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main\n").expect("HEAD");
+    std::fs::create_dir_all(repo.join("fixtures")).expect("fixtures");
+    let case = dir.path().join("case");
+    std::fs::create_dir_all(&case).expect("case");
+    let uri = |path: &std::path::Path| PathUri::from_host_native_path(path).expect("cwd uri");
+    let read = exec_command::witlex_document_read;
+
+    for script in [
+        "head -5 fixtures/rows.csv",
+        "sqlite3 fixtures/test.db .tables",
+        "python3 -c \"import csv; print(len(list(csv.reader(open('fixtures/rows.csv')))))\"",
+        "cargo test -p codex-core && git log --oneline -5 && cat README.md",
+    ] {
+        assert_eq!(read(script, &uri(&repo)).map(|r| r.path), None, "{script}");
+    }
+    assert!(read("pdftotext fixtures/sample.pdf -", &uri(&repo)).is_some());
+    let declined = read("head -5 流水.csv", &uri(&case)).expect("declined in a case folder");
+    assert!(
+        declined
+            .refusal()
+            .starts_with("WitLex blocked this command: 流水.csv is a table")
+    );
+}
