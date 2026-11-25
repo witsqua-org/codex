@@ -1,13 +1,82 @@
 use super::*;
+use crate::realtime_history::RealtimeHistoryState;
+use crate::session::UserInputMetadata;
+use crate::session::tests::make_session_and_context;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::TurnItemContributor;
 use codex_protocol::ResponseItemId;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
+use codex_protocol::protocol::RealtimeConversationStartedEvent;
+use codex_protocol::protocol::RealtimeConversationVersion;
+use codex_protocol::protocol::RealtimeHandoffRequested;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 use tracing_subscriber::prelude::*;
+
+#[tokio::test]
+async fn failed_realtime_receipt_preserves_sibling_input_before_sampling() {
+    // The fixture has no live thread, so committing a reserved handoff fails.
+    let (mut session, turn_context) = make_session_and_context().await;
+    let mut history = RealtimeHistoryState::default();
+    history.frame_enrollment = Some(true);
+    history.observe(&EventMsg::RealtimeConversationStarted(
+        RealtimeConversationStartedEvent {
+            realtime_session_id: Some("call".to_string()),
+            version: RealtimeConversationVersion::V2,
+        },
+    ));
+    let handoff = history
+        .prepare_handoff(&RealtimeHandoffRequested {
+            handoff_id: "handoff".to_string(),
+            item_id: "item".to_string(),
+            input_transcript: "voice prompt".to_string(),
+            active_transcript: Vec::new(),
+        })
+        .unwrap();
+    assert!(history.reserve_handoff(handoff.id));
+    session.realtime_history = Some(tokio::sync::Mutex::new(history));
+    let sibling_id = uuid::Uuid::now_v7();
+    let input = |text, id, realtime_handoff_id| TurnInput::UserInput {
+        content: vec![ResolvedUserInput::text(text)],
+        client_id: None,
+        metadata: UserInputMetadata {
+            response_item_uuid: Some(id),
+            realtime_handoff_id,
+            ..Default::default()
+        },
+    };
+    let session = Arc::new(session);
+    let error = run_turn(
+        Arc::clone(&session),
+        Arc::new(turn_context),
+        vec![
+            input(handoff.input, handoff.id, Some(handoff.id)),
+            input(
+                "typed sibling".to_string(),
+                sibling_id,
+                /*realtime_handoff_id*/ None,
+            ),
+        ],
+        &mut McpStartupRequirements::default(),
+        /*prewarmed_client_session*/ None,
+        CancellationToken::new(),
+    )
+    .await
+    .expect_err("a turn with an unconfirmed handoff must fail before sampling");
+    assert!(error.to_string().contains("accept realtime handoff"));
+
+    let sibling = ResponseItemId::for_admitted_user_input(sibling_id);
+    let voice = ResponseItemId::for_admitted_user_input(handoff.id);
+    let history = session.clone_history().await;
+    let recorded: Vec<_> = history
+        .raw_items()
+        .filter_map(ResponseItem::id)
+        .filter(|id| *id == &sibling || *id == &voice)
+        .collect();
+    assert_eq!(recorded, vec![&sibling]);
+}
 
 struct RewriteAgentMessageContributor;
 
@@ -20,6 +89,7 @@ impl TurnItemContributor for RewriteAgentMessageContributor {
     ) -> codex_extension_api::ExtensionFuture<'a, Result<(), String>> {
         Box::pin(async move {
             if let TurnItem::AgentMessage(agent_message) = item {
+                agent_message.phase = Some(codex_protocol::models::MessagePhase::Commentary);
                 agent_message.content = vec![AgentMessageContent::Text {
                     text: "plan contributed assistant text".to_string(),
                 }];
@@ -74,7 +144,7 @@ async fn plan_mode_uses_contributed_turn_item_for_last_agent_message() {
     session.services.extensions = Arc::new(builder.build());
     let turn_store = ExtensionData::new(turn_context.sub_id.clone());
     let mut state = PlanModeStreamState::new(/*unfinished_plan_id*/ None);
-    let mut last_agent_message = None;
+    let mut last_agent_message = AssistantMessages::default();
     let item = assistant_output_text("original assistant text");
 
     let step_context = StepContext::for_test(Arc::new(turn_context));
@@ -92,9 +162,10 @@ async fn plan_mode_uses_contributed_turn_item_for_last_agent_message() {
 
     assert!(handled);
     assert_eq!(
-        last_agent_message.as_deref(),
+        last_agent_message.trailing_commentary.as_deref(),
         Some("plan contributed assistant text")
     );
+    assert_eq!(last_agent_message.final_answer, None);
 }
 
 /// A model retry can reuse an unfinished plan. A later completion must use its own ID.
@@ -164,6 +235,7 @@ fn realtime_user_verification_notice_excludes_request_payload() {
     let event = EventMsg::ElicitationRequest(codex_protocol::approvals::ElicitationRequestEvent {
         turn_id: None,
         server_name: "private-server-name".to_string(),
+        environment_id: None,
         id: codex_protocol::mcp::RequestId::String("private-request-id".to_string()),
         request: codex_protocol::approvals::ElicitationRequest::UserVerification {
             meta: None,

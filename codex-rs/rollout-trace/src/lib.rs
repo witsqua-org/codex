@@ -17,7 +17,9 @@ mod payload;
 mod protocol_event;
 mod raw_event;
 mod reducer;
+mod shard;
 mod thread;
+mod tool_content;
 mod tool_dispatch;
 mod writer;
 
@@ -35,10 +37,12 @@ pub use compaction::CompactionTraceContext;
 pub use inference::InferenceTraceAttempt;
 /// Shared recorder context for inference attempts within one Codex turn.
 pub use inference::InferenceTraceContext;
+pub use inference::serialize_trace_items;
 /// Trace-owned MCP execution correlation propagated to bridge request metadata.
 pub use mcp::McpCallTraceContext;
 /// Public reduced trace model returned by replay.
 pub use model::*;
+pub use payload::PayloadCapture;
 /// Stable identifier for one raw payload inside a rollout bundle.
 pub use payload::RawPayloadId;
 /// Coarse role labels for raw payload files.
@@ -57,6 +61,7 @@ pub use raw_event::RawTraceEventContext;
 pub use raw_event::RawTraceEventPayload;
 /// Replay a bundle recorded by this executable into a `RolloutTrace`.
 pub use reducer::replay_bundle;
+pub use shard::PayloadReader;
 /// Raw payload captured when a child agent reports completion to its parent.
 pub use thread::AgentResultTracePayload;
 /// Environment variable that enables local trace-bundle recording.
@@ -75,5 +80,6 @@ pub use tool_dispatch::ToolDispatchRequester;
 pub use tool_dispatch::ToolDispatchResult;
 /// No-op-capable handle for recording one resolved tool dispatch.
 pub use tool_dispatch::ToolDispatchTraceContext;
+pub use writer::TraceCaptureLimits;
 /// Append-only writer used by hot-path Codex instrumentation.
 pub use writer::TraceWriter;

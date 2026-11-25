@@ -72,6 +72,9 @@ impl TraceReducer {
         tool_call_id: &str,
         runtime_payload: &RawPayloadRef,
     ) -> Result<()> {
+        if !runtime_payload.is_complete() {
+            return Ok(());
+        }
         let kind = self
             .rollout
             .tool_calls
@@ -82,7 +85,7 @@ impl TraceReducer {
         match kind {
             ToolCallKind::AssignAgentTask => {
                 let payload: CollabAgentInteractionBeginEvent =
-                    serde_json::from_value(self.read_payload_json(runtime_payload)?)?;
+                    serde_json::from_value(self.payload_reader.read_json(runtime_payload)?)?;
                 self.queue_message_agent_interaction(
                     tool_call_id,
                     InteractionEdgeKind::AssignAgentTask,
@@ -93,7 +96,7 @@ impl TraceReducer {
             }
             ToolCallKind::SendMessage => {
                 let payload: CollabAgentInteractionBeginEvent =
-                    serde_json::from_value(self.read_payload_json(runtime_payload)?)?;
+                    serde_json::from_value(self.payload_reader.read_json(runtime_payload)?)?;
                 self.queue_message_agent_interaction(
                     tool_call_id,
                     InteractionEdgeKind::SendMessage,
@@ -104,7 +107,7 @@ impl TraceReducer {
             }
             ToolCallKind::CloseAgent => {
                 let payload: CollabCloseBeginEvent =
-                    serde_json::from_value(self.read_payload_json(runtime_payload)?)?;
+                    serde_json::from_value(self.payload_reader.read_json(runtime_payload)?)?;
                 self.upsert_close_agent_interaction(
                     tool_call_id,
                     payload.receiver_thread_id.to_string(),
@@ -132,10 +135,10 @@ impl TraceReducer {
     ) -> Result<()> {
         let kind = self.rollout.tool_calls[tool_call_id].kind.clone();
         // MCP results are opaque evidence; they cannot describe agent interactions.
-        if matches!(kind, ToolCallKind::Mcp { .. }) {
+        if !runtime_payload.is_complete() || matches!(kind, ToolCallKind::Mcp { .. }) {
             return Ok(());
         }
-        let runtime_payload_json = self.read_payload_json(runtime_payload)?;
+        let runtime_payload_json = self.payload_reader.read_json(runtime_payload)?;
         if runtime_payload_json.get("agent_thread_id").is_some() {
             let payload: SubAgentActivityEvent = serde_json::from_value(runtime_payload_json)?;
             return self.end_sub_agent_activity(wall_time_unix_ms, tool_call_id, &kind, &payload);
@@ -259,7 +262,10 @@ impl TraceReducer {
         })?;
         let started_at_unix_ms = tool_call.execution.started_at_unix_ms;
         let message_author = self.agent_path_for_thread(&tool_call.thread_id)?;
-        let message_content = self.agent_message_content_from_invocation(tool_call_id)?;
+        let Some(message_content) = self.agent_message_content_from_invocation(tool_call_id)?
+        else {
+            return Ok(());
+        };
         let carried_raw_payload_ids = self.agent_tool_payload_ids(tool_call_id)?;
         self.queue_or_resolve_agent_interaction_edge(PendingAgentInteractionEdge {
             edge_id,
@@ -277,7 +283,10 @@ impl TraceReducer {
         })
     }
 
-    fn agent_message_content_from_invocation(&self, tool_call_id: &str) -> Result<String> {
+    fn agent_message_content_from_invocation(
+        &mut self,
+        tool_call_id: &str,
+    ) -> Result<Option<String>> {
         let tool_call = self.rollout.tool_calls.get(tool_call_id).with_context(|| {
             format!("agent activity referenced unknown tool call {tool_call_id}")
         })?;
@@ -296,7 +305,10 @@ impl TraceReducer {
                     "agent activity tool call {tool_call_id} referenced missing invocation payload {invocation_payload_id}"
                 )
             })?;
-        let invocation = self.read_payload_json(invocation_payload)?;
+        if !invocation_payload.capture.is_complete() {
+            return Ok(None);
+        }
+        let invocation = self.payload_reader.read_json(invocation_payload)?;
         let arguments = invocation
             .get("payload")
             .and_then(|payload| payload.get("arguments"))
@@ -306,7 +318,7 @@ impl TraceReducer {
             })?;
         let args: AgentMessageInvocationArgs = serde_json::from_str(arguments)
             .with_context(|| format!("parse agent activity tool call {tool_call_id} arguments"))?;
-        Ok(args.message)
+        Ok(Some(args.message))
     }
 
     /// Adds the canonical tool result payload to an already reduced multi-agent edge.
