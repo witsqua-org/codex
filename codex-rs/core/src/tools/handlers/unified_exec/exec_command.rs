@@ -209,14 +209,6 @@ impl ExecCommandHandler {
             }));
         }
 
-        // WitLex (D205): a shell read of a case file is declined before anything runs.
-        if session.features().enabled(Feature::WitlexDocumentGuard)
-            && !prepared.turn_environment.environment().is_remote()
-            && let Some(read) = witlex_document_read(&prepared.hook_command, &prepared.cwd)
-        {
-            return Err(FunctionCallError::RespondToModel(read.refusal()));
-        }
-
         emit_unified_exec_tty_metric(&step_context.session_telemetry, prepared.tty);
         crate::tools::lifecycle::notify_command_start(
             context.session.as_ref(),
@@ -283,30 +275,6 @@ impl ExecCommandHandler {
             }
         }
     }
-}
-
-/// WitLex (D205): a document, or a table or database outside a git work tree, that the script
-/// reads itself; a file that does not exist yet is made, not read. A repository at the home
-/// folder or the root does not count as a work tree.
-pub(super) fn witlex_document_read(
-    script: &str,
-    cwd: &PathUri,
-) -> Option<codex_shell_command::document_guard::DocumentRead> {
-    let home = dirs::home_dir();
-    let in_git_tree = |path: &std::path::Path| {
-        codex_git_utils::get_git_repo_root(path)
-            .is_some_and(|root| root.parent().is_some() && home.as_deref() != Some(root.as_path()))
-    };
-    let exists = |path: &std::path::Path| path.exists();
-    codex_shell_command::document_guard::document_read_in_script(
-        script,
-        &cwd.to_path_buf(),
-        home.as_deref(),
-        &codex_shell_command::document_guard::Probe {
-            exists: &exists,
-            in_git_tree: &in_git_tree,
-        },
-    )
 }
 
 fn one_shot_exec_command_spec(spec: ToolSpec) -> ToolSpec {

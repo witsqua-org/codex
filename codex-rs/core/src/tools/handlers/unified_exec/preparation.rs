@@ -65,6 +65,17 @@ impl PreparedExecCommand {
         session: &Session,
         step: &StepContext,
     ) -> ExecApprovalRequirement {
+        // WitLex (D205, D209): a shell read of a case file is a forbidden command, as a forbidden
+        // exec-policy rule is in Codex — in every mode, Full access included — and the model gets
+        // Codex's reason, naming WitLex's reader and export().
+        if session.features().enabled(Feature::WitlexDocumentGuard)
+            && !self.turn_environment.environment().is_remote()
+            && let Some(read) = witlex_document_read(&self.hook_command, &self.cwd)
+        {
+            return ExecApprovalRequirement::Forbidden {
+                reason: read.rejection(&self.hook_command),
+            };
+        }
         let environment = &self.turn_environment;
         let session_shell = session.user_shell();
         let configured_shell = environment.shell.as_ref().unwrap_or(session_shell.as_ref());
@@ -315,4 +326,28 @@ impl<'a> ParsedExecCommand<'a> {
             prefix_rule: args.prefix_rule,
         })
     }
+}
+
+/// WitLex (D205): a document, or a table or database outside a git work tree, that the script
+/// reads itself; a file that does not exist yet is made, not read. A repository at the home
+/// folder or the root does not count as a work tree.
+pub(crate) fn witlex_document_read(
+    script: &str,
+    cwd: &PathUri,
+) -> Option<codex_shell_command::document_guard::DocumentRead> {
+    let home = dirs::home_dir();
+    let in_git_tree = |path: &std::path::Path| {
+        codex_git_utils::get_git_repo_root(path)
+            .is_some_and(|root| root.parent().is_some() && home.as_deref() != Some(root.as_path()))
+    };
+    let exists = |path: &std::path::Path| path.exists();
+    codex_shell_command::document_guard::document_read_in_script(
+        script,
+        &cwd.to_path_buf(),
+        home.as_deref(),
+        &codex_shell_command::document_guard::Probe {
+            exists: &exists,
+            in_git_tree: &in_git_tree,
+        },
+    )
 }

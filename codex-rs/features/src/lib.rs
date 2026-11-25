@@ -573,8 +573,8 @@ pub enum Feature {
     ResponsesWebsockets,
     /// Legacy rollout flag for Responses API WebSocket transport v2 experiments.
     ResponsesWebsocketsV2,
-    /// WitLex (D205): exec_command declines a shell read of a document, or of a table or
-    /// database outside a git work tree, and names WitLex's reader for it instead.
+    /// WitLex (D205, D209): a shell read of a document, or of a table or database outside a
+    /// git work tree, is a forbidden command (Codex's rejection), naming WitLex's reader.
     WitlexDocumentGuard,
 }
 

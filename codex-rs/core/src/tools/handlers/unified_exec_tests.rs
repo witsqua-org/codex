@@ -867,7 +867,7 @@ fn witlex_document_guard_leaves_a_git_work_tree_its_shell() {
     }
     std::fs::write(case.join("流水.csv"), "a,b\n").expect("statement");
     let uri = |path: &std::path::Path| PathUri::from_host_native_path(path).expect("cwd uri");
-    let read = exec_command::witlex_document_read;
+    let read = preparation::witlex_document_read;
 
     for script in [
         "head -5 fixtures/rows.csv",
@@ -884,9 +884,8 @@ fn witlex_document_guard_leaves_a_git_work_tree_its_shell() {
         None
     );
     let declined = read("head -5 流水.csv", &uri(&case)).expect("declined in a case folder");
-    assert!(
-        declined
-            .refusal()
-            .starts_with("WitLex blocked this command: 流水.csv is a table")
+    assert_eq!(
+        declined.rejection("head -5 流水.csv"),
+        "`head -5 流水.csv` rejected: WitLex reads 流水.csv (a table) with sheet.file(path); its export() writes a copy this shell may process"
     );
 }

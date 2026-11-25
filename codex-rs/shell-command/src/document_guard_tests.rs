@@ -342,14 +342,18 @@ fn tables_and_databases_in_a_git_work_tree_stay_readable() {
 }
 
 #[test]
-fn the_refusal_names_the_reader_and_export() {
+fn the_rejection_is_codexs_format_and_names_the_reader_and_export() {
     let read = check("head -5 /tmp/x/对公流水.csv").expect("declined");
     assert_eq!(read.kind, DocumentKind::Table);
     assert_eq!(read.reader, "sheet.file");
     assert_eq!(
-        read.refusal(),
-        "WitLex blocked this command: 对公流水.csv is a table — read it with sheet.file(path); its export() writes a copy this shell may process."
+        read.rejection("head -5 /tmp/x/对公流水.csv"),
+        "`head -5 /tmp/x/对公流水.csv` rejected: WitLex reads 对公流水.csv (a table) with sheet.file(path); its export() writes a copy this shell may process"
     );
+    let long = format!("cat a.pdf # {}", "x".repeat(300));
+    let shortened = read.rejection(&long);
+    assert!(shortened.starts_with("`cat a.pdf # xxx"), "{shortened}");
+    assert!(shortened.contains("…` rejected: WitLex reads"), "{shortened}");
     assert_eq!(
         check("sqlite3 a.db .tables").map(|r| r.reader),
         Some("sqlite.file")

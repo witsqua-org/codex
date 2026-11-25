@@ -45,8 +45,8 @@ pub enum DocumentKind {
 }
 
 impl DocumentRead {
-    /// The one sentence the model gets in place of the command's output.
-    pub fn refusal(&self) -> String {
+    /// Why the command is declined, in one short sentence naming WitLex's reader and export().
+    pub fn justification(&self) -> String {
         let name = self
             .path
             .file_name()
@@ -58,9 +58,21 @@ impl DocumentRead {
             DocumentKind::Database => "a database",
         };
         format!(
-            "WitLex blocked this command: {name} is {kind} — read it with {}(path); its export() writes a copy this shell may process.",
+            "WitLex reads {name} ({kind}) with {}(path); its export() writes a copy this shell may process",
             self.reader
         )
+    }
+
+    /// The reason the model gets, in the format of Codex's forbidden commands
+    /// (`` `<command>` rejected: <justification> ``). A long script is shortened.
+    pub fn rejection(&self, command: &str) -> String {
+        const SHOWN: usize = 200;
+        let command = command.trim();
+        let shown = match command.char_indices().nth(SHOWN) {
+            Some((end, _)) => format!("{}…", &command[..end]),
+            None => command.to_string(),
+        };
+        format!("`{shown}` rejected: {}", self.justification())
     }
 }
 

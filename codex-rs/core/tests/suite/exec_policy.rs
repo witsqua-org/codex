@@ -466,6 +466,91 @@ async fn deeply_nested_forced_rm_is_rejected_before_execution_when_approvals_are
     Ok(())
 }
 
+/// WitLex (D205, D209): with `witlex_document_guard`, a shell read of a case file is a forbidden
+/// command, as a forbidden exec-policy rule is: nothing runs, nobody is asked (Full access too),
+/// no command item is emitted, and the model gets Codex's reason naming WitLex's reader.
+#[test_case::test_case(AskForApproval::OnRequest, PermissionProfile::workspace_write(); "ask")]
+#[test_case::test_case(AskForApproval::Never, PermissionProfile::Disabled; "full_access")]
+#[tokio::test]
+async fn witlex_document_guard_forbids_a_shell_read_of_a_case_file(
+    approval_policy: AskForApproval,
+    permission_profile: PermissionProfile,
+) -> Result<()> {
+    skip_if_target_windows!(Ok(()), "uses a POSIX shell command fixture");
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::WitlexDocumentGuard)
+            .expect("enable the document guard");
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+    fs::write(test.config.cwd.join("起诉书.pdf"), "%PDF-1.7\n")?;
+    let call_id = "witlex-document-guard";
+    let args = json!({
+        "cmd": "head -5 起诉书.pdf > peek.txt",
+        "yield_time_ms": 1_000,
+    });
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-witlex-guard-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-witlex-guard-1"),
+        ]),
+    )
+    .await;
+    let results_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-witlex-guard", "done"),
+            ev_completed("resp-witlex-guard-2"),
+        ]),
+    )
+    .await;
+
+    submit_user_turn(
+        &test,
+        "peek at the statement",
+        approval_policy,
+        permission_profile,
+        /*collaboration_mode*/ None,
+    )
+    .await?;
+
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ExecApprovalRequest(_)
+                | EventMsg::ExecCommandBegin(_)
+                | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    assert!(
+        matches!(event, EventMsg::TurnComplete(_)),
+        "a forbidden command is neither asked about nor started: {event:?}"
+    );
+
+    let output = results_mock
+        .single_request()
+        .function_call_output_text(call_id)
+        .expect("the forbidden command has a tool response");
+    assert!(
+        output.contains(
+            "`head -5 起诉书.pdf > peek.txt` rejected: WitLex reads 起诉书.pdf (a document) with pdf.file(path); its export() writes a copy this shell may process"
+        ),
+        "unexpected output: {output}"
+    );
+    assert!(
+        !test.config.cwd.join("peek.txt").exists(),
+        "the forbidden command must not run"
+    );
+
+    Ok(())
+}
+
 #[cfg(windows)]
 #[tokio::test]
 async fn unified_exec_disabled_windows_sandbox_rejects_managed_read_only_command() -> Result<()> {
