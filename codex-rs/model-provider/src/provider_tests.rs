@@ -1038,3 +1038,61 @@ fn other_errors_are_unchanged_by_the_setting() {
         codex_protocol::error::CodexErrorDetails::RateLimitExceeded(_)
     ));
 }
+
+fn function_call(encrypted_function_args: Option<Vec<String>>) -> ResponseItem {
+    ResponseItem::FunctionCall {
+        encrypted_content: None,
+        status: None,
+        id: None,
+        name: "spawn_agent".to_string(),
+        namespace: Some("collaboration".to_string()),
+        arguments: r#"{"task_name":"finder","message":"Read vault/word.txt."}"#.to_string(),
+        encrypted_function_args,
+        call_id: "call-1".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    }
+}
+
+fn provider_with_plaintext_arguments(enabled: Option<bool>) -> SharedModelProvider {
+    let mut info = provider_for("https://qwen.example/v1".to_string());
+    info.capabilities = Some(codex_model_provider_info::ModelProviderCapabilities {
+        plaintext_function_arguments: enabled,
+        ..Default::default()
+    });
+    create_model_provider(info, /*auth_manager*/ None)
+}
+
+#[test]
+fn plaintext_function_arguments_marks_unmarked_calls_only_when_the_provider_says_so() {
+    // On: an unmarked call gets OpenAI's plain-text marker (an empty list).
+    let mut item = function_call(None);
+    provider_with_plaintext_arguments(Some(true)).normalize_completed_output_item(&mut item);
+    assert_eq!(item, function_call(Some(Vec::new())));
+
+    // On: a call that already carries the marker is left as it came.
+    let marked = function_call(Some(vec!["message".to_string()]));
+    let mut item = marked.clone();
+    provider_with_plaintext_arguments(Some(true)).normalize_completed_output_item(&mut item);
+    assert_eq!(item, marked);
+
+    // Off or unset: nothing changes.
+    for enabled in [None, Some(false)] {
+        let mut item = function_call(None);
+        provider_with_plaintext_arguments(enabled).normalize_completed_output_item(&mut item);
+        assert_eq!(item, function_call(None));
+    }
+
+    // Other items are untouched.
+    let message = ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: Vec::new(),
+        phase: None,
+        encrypted_content: None,
+        status: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let mut item = message.clone();
+    provider_with_plaintext_arguments(Some(true)).normalize_completed_output_item(&mut item);
+    assert_eq!(item, message);
+}

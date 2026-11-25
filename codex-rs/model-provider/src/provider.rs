@@ -602,6 +602,23 @@ impl ModelProvider for ConfiguredModelProvider {
         ProviderCapabilities::from_config(&self.info)
     }
 
+    fn normalize_completed_output_item(&self, item: &mut ResponseItem) {
+        // WitLex (D217): a provider that never encrypts tool arguments opts in; a call that already
+        // carries the marker is left as it came.
+        if self
+            .info
+            .capabilities
+            .and_then(|capabilities| capabilities.plaintext_function_arguments)
+            .unwrap_or(false)
+            && let ResponseItem::FunctionCall {
+                encrypted_function_args: marker @ None,
+                ..
+            } = item
+        {
+            *marker = Some(Vec::new());
+        }
+    }
+
     fn map_api_error(&self, error: ApiError) -> CodexErr {
         // WitLex (D215): a provider that says `insufficient_quota` for a rate limit opts in.
         if self

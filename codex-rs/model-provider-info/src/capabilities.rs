@@ -24,6 +24,12 @@ pub struct ModelProviderCapabilities {
     /// otherwise reads as OpenAI's exhausted account quota. When true, that 429 is a retryable rate
     /// limit that keeps the provider's message and retry-after. Defaults to false.
     pub insufficient_quota_is_rate_limit: Option<bool>,
+    /// WitLex (D217): the provider never encrypts tool arguments, so a function call that arrives
+    /// without `encrypted_function_args` carries its arguments in plain text. When true, such a call
+    /// is marked as OpenAI's server marks plain-text arguments (an empty list); Multi-agent V2's
+    /// spawn_agent, send_message and followup_task then deliver their `message` as plain text
+    /// instead of an `encrypted_content` part the provider rejects. Defaults to false.
+    pub plaintext_function_arguments: Option<bool>,
 }
 
 /// Remote context-compaction protocols supported by a model provider.
