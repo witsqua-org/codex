@@ -948,3 +948,93 @@ async fn configured_provider_models_manager_uses_provider_bearer_token() {
         }
     }
 }
+
+/// WitLex (D215): Qwen's 429 for a per-minute token limit, in the shape of its real 4xx bodies.
+fn qwen_insufficient_quota(retry_after: Option<codex_http_client::RetryAfter>) -> ApiError {
+    ApiError::Transport(TransportError::Http {
+        status: http::StatusCode::TOO_MANY_REQUESTS,
+        url: None,
+        headers: None,
+        body: Some(
+            json!({
+                "request_id": "req-qwen",
+                "error": {
+                    "code": "insufficient_quota",
+                    "type": "Throttling.AllocationQuota",
+                    "message": "Allocated quota exceeded, please increase your quota limit.",
+                },
+            })
+            .to_string(),
+        ),
+        retry_after,
+    })
+}
+
+fn provider_with_quota_as_rate_limit(enabled: Option<bool>) -> SharedModelProvider {
+    let mut info = provider_for("https://qwen.example/v1".to_string());
+    info.capabilities = Some(codex_model_provider_info::ModelProviderCapabilities {
+        insufficient_quota_is_rate_limit: enabled,
+        ..Default::default()
+    });
+    create_model_provider(info, /*auth_manager*/ None)
+}
+
+#[test]
+fn insufficient_quota_is_a_rate_limit_when_the_provider_says_so() {
+    let advice = codex_http_client::RetryAfter::from_delay(std::time::Duration::from_secs(7))
+        .expect("retry advice");
+    let error = provider_with_quota_as_rate_limit(Some(true))
+        .map_api_error(qwen_insufficient_quota(Some(advice)));
+
+    assert_eq!(
+        error.to_codex_protocol_error(),
+        codex_protocol::protocol::CodexErrorInfo::RateLimitExceeded
+    );
+    assert_eq!(
+        error.to_string(),
+        "rate limit exceeded: Allocated quota exceeded, please increase your quota limit."
+    );
+    // Retried like any rate limit, after the provider's retry-after.
+    assert_eq!(error.retry_after(), Some(advice));
+    assert!(error.retry_delay(/*retry_count*/ 1).is_some());
+}
+
+#[test]
+fn insufficient_quota_stays_the_account_quota_by_default() {
+    for enabled in [None, Some(false)] {
+        let error =
+            provider_with_quota_as_rate_limit(enabled).map_api_error(qwen_insufficient_quota(None));
+        assert_eq!(
+            error.to_codex_protocol_error(),
+            codex_protocol::protocol::CodexErrorInfo::UsageLimitExceeded
+        );
+        assert_eq!(error.retry_delay(/*retry_count*/ 1), None);
+    }
+}
+
+#[test]
+fn other_errors_are_unchanged_by_the_setting() {
+    let provider = provider_with_quota_as_rate_limit(Some(true));
+    let other_429 = ApiError::Transport(TransportError::Http {
+        status: http::StatusCode::TOO_MANY_REQUESTS,
+        url: None,
+        headers: None,
+        body: Some(r#"{"error":{"code":"limit_requests","message":"slow down"}}"#.to_string()),
+        retry_after: None,
+    });
+    assert!(matches!(
+        provider.map_api_error(other_429).details(),
+        codex_protocol::error::CodexErrorDetails::RetryLimit(_)
+    ));
+    let quota_400 = ApiError::Transport(TransportError::Http {
+        status: http::StatusCode::BAD_REQUEST,
+        url: None,
+        headers: None,
+        body: Some(r#"{"error":{"code":"insufficient_quota","message":"x"}}"#.to_string()),
+        retry_after: None,
+    });
+    assert!(!matches!(
+        provider.map_api_error(quota_400).details(),
+        codex_protocol::error::CodexErrorDetails::RateLimitExceeded(_)
+    ));
+}

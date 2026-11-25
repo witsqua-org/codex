@@ -478,6 +478,40 @@ pub(crate) fn create_model_provider_with_runtime(
     ))
 }
 
+/// WitLex (D215): an HTTP 429 whose error `code` or `type` is `insufficient_quota`, as a retryable
+/// rate limit with the provider's message and retry-after. Other errors are left to the default.
+fn insufficient_quota_as_rate_limit(error: &ApiError) -> Option<CodexErr> {
+    let ApiError::Transport(TransportError::Http {
+        status,
+        body,
+        retry_after,
+        ..
+    }) = error
+    else {
+        return None;
+    };
+    if *status != http::StatusCode::TOO_MANY_REQUESTS {
+        return None;
+    }
+    let body = serde_json::from_str::<serde_json::Value>(body.as_deref()?).ok()?;
+    let provider_error = body.get("error")?;
+    let names = |field: &str| provider_error.get(field).and_then(serde_json::Value::as_str);
+    if names("code") != Some("insufficient_quota") && names("type") != Some("insufficient_quota") {
+        return None;
+    }
+    let message = names("message")
+        .filter(|message| !message.trim().is_empty())
+        .unwrap_or("insufficient_quota")
+        .to_owned();
+    let mapped = CodexErr::new(codex_protocol::error::CodexErrorDetails::RateLimitExceeded(
+        message,
+    ));
+    Some(match retry_after {
+        Some(retry_after) => mapped.with_retry_after(*retry_after),
+        None => mapped,
+    })
+}
+
 /// Runtime model provider that orchestrates primary and gateway credentials.
 #[derive(Clone, Debug)]
 struct ConfiguredModelProvider {
@@ -566,6 +600,20 @@ impl ModelProvider for ConfiguredModelProvider {
 
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::from_config(&self.info)
+    }
+
+    fn map_api_error(&self, error: ApiError) -> CodexErr {
+        // WitLex (D215): a provider that says `insufficient_quota` for a rate limit opts in.
+        if self
+            .info
+            .capabilities
+            .and_then(|capabilities| capabilities.insufficient_quota_is_rate_limit)
+            .unwrap_or(false)
+            && let Some(error) = insufficient_quota_as_rate_limit(&error)
+        {
+            return error;
+        }
+        codex_api::map_api_error(error)
     }
 
     fn approval_review_preferred_model(&self) -> &'static str {

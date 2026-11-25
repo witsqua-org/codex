@@ -3307,6 +3307,10 @@
           "description": "Whether hosted web search may access the live web.",
           "type": "boolean"
         },
+        "insufficient_quota_is_rate_limit": {
+          "description": "WitLex (D215): the provider answers a rate limit with HTTP 429 and the error code `insufficient_quota` (Qwen's `Throttling.AllocationQuota`, a per-minute token limit), which otherwise reads as OpenAI's exhausted account quota. When true, that 429 is a retryable rate limit that keeps the provider's message and retry-after. Defaults to false.",
+          "type": "boolean"
+        },
         "remote_compaction": {
           "allOf": [
             {

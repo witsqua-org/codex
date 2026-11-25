@@ -19,6 +19,11 @@ pub struct ModelProviderCapabilities {
     pub external_web_access: Option<bool>,
     /// Remote context-compaction protocol; omission preserves provider defaults.
     pub remote_compaction: Option<RemoteCompactionSupport>,
+    /// WitLex (D215): the provider answers a rate limit with HTTP 429 and the error code
+    /// `insufficient_quota` (Qwen's `Throttling.AllocationQuota`, a per-minute token limit), which
+    /// otherwise reads as OpenAI's exhausted account quota. When true, that 429 is a retryable rate
+    /// limit that keeps the provider's message and retry-after. Defaults to false.
+    pub insufficient_quota_is_rate_limit: Option<bool>,
 }
 
 /// Remote context-compaction protocols supported by a model provider.
